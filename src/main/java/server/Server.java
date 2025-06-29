@@ -4,42 +4,46 @@ import javax.imageio.ImageIO;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.image.BufferedImage;
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
+import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.*;
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.*;
 
 public class Server {
 
-    /* -------- GUI -------- */
-    private static volatile int kernelSize = 3;   // 1‒15, tylko nieparzyste
+    /* --- GUI --- */
+    private static volatile int kernelSize = 3;   // 1–15, tylko nieparzyste
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(Server::createGui);
-        server();
+        try {                                     // inicjacja bazy (punkt 5)
+            DbHelper.init(Paths.get("images", "index.db").toString());
+        } catch (SQLException ex) {
+            ex.printStackTrace();
+        }
+        server();                                // start gniazda
     }
 
-    /* -------- gniazdo + obsługa klienta -------- */
+    /* --- gniazdo + klient --- */
     private static void server() {
         try (ServerSocket serverSocket = new ServerSocket(5000)) {
             System.out.println("Serwer nasłuchuje na 5000...");
 
-            while (true) {
+            while (true) {                       // <- pętla zostaje na zawsze
                 try (Socket client = serverSocket.accept();
                      DataInputStream  in  = new DataInputStream(client.getInputStream());
                      DataOutputStream out = new DataOutputStream(client.getOutputStream())) {
 
-                    /* --- PUNKT 1: odbiór PNG --- */
-                    int length = in.readInt();
-                    byte[] raw = in.readNBytes(length);
+                    /* 1. odbiór PNG */
+                    int len = in.readInt();
+                    byte[] raw = in.readNBytes(len);
                     System.out.println("PUNKT 1: odebrano " + raw.length + " B");
 
-                    /* --- PUNKT 2: zapis oryginału --- */
+                    /* 2. zapis oryginału */
                     Path dir = Paths.get("images");
                     Files.createDirectories(dir);
                     String stamp = LocalDateTime.now()
@@ -48,7 +52,7 @@ public class Server {
                     Files.write(original, raw);
                     System.out.println("PUNKT 2: zapisano " + original);
 
-                    /* --- PUNKT 4: box-blur --- */
+                    /* 4. filtrowanie */
                     BufferedImage src = ImageIO.read(original.toFile());
                     long t0 = System.currentTimeMillis();
                     BufferedImage dst = boxBlur(src, kernelSize);
@@ -59,17 +63,19 @@ public class Server {
                     System.out.printf("PUNKT 4: rozmyto w %d ms (kernel=%d)%n",
                             delay, kernelSize);
 
-                    /* --- PUNKT 6: odesłanie pliku klientowi --- */
+                    /* 5. baza */
+                    DbHelper.insert(processed.toString(), kernelSize, delay);
+                    System.out.println("PUNKT 5: wpis w bazie ok");
+
+                    /* 6. wysyłka do klienta */
                     byte[] ans = Files.readAllBytes(processed);
-                    out.writeInt(ans.length);   // 4 bajty długości
-                    out.write(ans);             // sam obraz
+                    out.writeInt(ans.length);
+                    out.write(ans);
                     out.flush();
                     System.out.println("PUNKT 6: odesłano " + ans.length + " B");
 
-                    /*  punkt 5 (baza) dopiszemy później  */
-
                 } catch (IOException | InterruptedException ex) {
-                    ex.printStackTrace();   // problem dotyczył tylko tego klienta
+                    ex.printStackTrace();        // błąd dotyczy tylko jednego klienta
                 }
             }
 
@@ -79,13 +85,13 @@ public class Server {
         }
     }
 
-    /* -------- równoległy box-blur -------- */
+    /* --- równoległy box-blur --- */
     private static BufferedImage boxBlur(BufferedImage src, int size)
             throws InterruptedException {
 
         int cores = Runtime.getRuntime().availableProcessors();
-        BufferedImage dst = new BufferedImage(
-                src.getWidth(), src.getHeight(), BufferedImage.TYPE_INT_ARGB);
+        BufferedImage dst = new BufferedImage(src.getWidth(), src.getHeight(),
+                BufferedImage.TYPE_INT_ARGB);
 
         ExecutorService pool = Executors.newFixedThreadPool(cores);
         int slice = (int) Math.ceil(src.getHeight() / (double) cores);
@@ -100,7 +106,7 @@ public class Server {
         return dst;
     }
 
-    /* -------- GUI: suwak promienia -------- */
+    /* --- GUI (su­wak) --- */
     private static void createGui() {
         JFrame f = new JFrame("Promień filtra");
         JSlider slider = new JSlider(1, 15, kernelSize);
@@ -109,7 +115,7 @@ public class Server {
         JLabel label = new JLabel("Promień: " + kernelSize, SwingConstants.CENTER);
 
         slider.addChangeListener(e -> {
-            int v = slider.getValue() | 1;   // wymuszamy nieparzystość
+            int v = slider.getValue() | 1;       // wymuś nieparzystość
             kernelSize = v;
             label.setText("Promień: " + v);
             if (slider.getValue() != v) slider.setValue(v);

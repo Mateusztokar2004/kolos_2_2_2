@@ -5,65 +5,58 @@ import java.net.Socket;
 
 public class Client {
 
-    public static Socket connectToServer(String address, int port) {
-        try {
-            Socket socket = new Socket(address, port);
-            return socket;
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+    /* ------------- połączenie ------------- */
+    private static Socket connect(String host, int port) throws IOException {
+        return new Socket(host, port);
+    }
+
+    /* ------------- wysyłanie -------------- */
+    private static void send(String pngPath, Socket socket) throws IOException {
+        File file = new File(pngPath);
+
+        try (FileInputStream  in  = new FileInputStream(file);
+             DataOutputStream out = new DataOutputStream(socket.getOutputStream())) {
+
+            /* 4-bajtowa długość – tak czyta serwer */
+            out.writeInt((int) file.length());
+
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) != -1)
+                out.write(buf, 0, n);
+
+            out.flush();
+            System.out.println("File sent (" + file.length() + " B).");
         }
     }
 
-    public static void send(String path, Socket socket) {
-        try {
-            File file = new File(path);
-            FileInputStream  input  = new FileInputStream(file);
-            DataOutputStream output = new DataOutputStream(socket.getOutputStream());
+    /* ------------- odbiór ----------------- */
+    private static void receive(Socket socket, String outPath) throws IOException {
+        try (DataInputStream in  = new DataInputStream(socket.getInputStream());
+             FileOutputStream out = new FileOutputStream(outPath)) {
 
-            /* 4-bajtowa długość */
-            output.writeInt((int) file.length());
+            int fileSize   = in.readInt();          // 4 bajty długości
+            byte[] buffer  = new byte[8192];
+            int received   = 0;
 
-            byte[] buffer = new byte[8192];
-            int count;
-            while ((count = input.read(buffer)) != -1)
-                output.write(buffer, 0, count);
-
-            output.flush();
-            System.out.println("File sent.");
-
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    public static void receive(Socket socket, String path) {
-        try {
-            DataInputStream input = new DataInputStream(socket.getInputStream());
-            FileOutputStream output = new FileOutputStream(path);
-
-            byte[] buffer = new byte[8192];
-            int count;
-            int receivedSize = 0;
-            long fileSize = input.readInt();
-
-            while (receivedSize < fileSize) {
-                count = input.read(buffer);
-                output.write(buffer, 0, count);
-                System.out.println(count);
-                receivedSize += count;
+            while (received < fileSize) {
+                int n = in.read(buffer, 0,
+                        Math.min(buffer.length, fileSize - received));
+                if (n == -1) throw new EOFException("Stream closed too early");
+                out.write(buffer, 0, n);
+                received += n;
             }
-            output.close();
-
-            System.out.println("File received.");
-
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+            System.out.println("File received (" + received + " B).");
         }
     }
 
+    /* ------------- main -------------------- */
     public static void main(String[] args) {
-        Socket socket = connectToServer("localhost", 5000);
-        send("input.png", socket);
-        receive(socket, "output.png");
+        try (Socket socket = connect("localhost", 5000)) {
+            send("input.png", socket);          // podaj ścieżkę do pliku źródłowego
+            receive(socket, "output.png");      // wynik z serwera
+        } catch (IOException ex) {
+            ex.printStackTrace();
+        }
     }
 }
